@@ -1,0 +1,8 @@
+pandas>=2.0
+numpy>=1.25
+scipy>=1.10
+matplotlib>=3.7
+pyarrow>=14.0
+statsmodels>=0.14
+pyyaml>=6.0
+pandas_datareader>=0.10  # optional, for --mode fred

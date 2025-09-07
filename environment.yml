@@ -1,0 +1,15 @@
+name: tsfm-mre
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.9
+  - pandas>=2.0
+  - numpy>=1.25
+  - scipy>=1.10
+  - matplotlib>=3.7
+  - pyarrow>=14.0
+  - statsmodels>=0.14
+  - pyyaml>=6.0
+  - pip
+  - pip:
+      - pandas_datareader>=0.10

@@ -1,0 +1,20 @@
+# H.15 yield-curve configuration (documentation only)
+series: ["DGS3MO", "DGS2", "DGS10"]
+date_range:
+  start: "2003-01-01"
+  end: "2025-06-30"
+splits:
+  train_start: "2003-01-01"
+  valid_start: "2013-01-02"
+  test_start:  "2019-01-02"
+  end:         "2025-06-30"
+preprocess:
+  scaler: "robust_zscore"
+  align: "business_day"
+forecast:
+  model: "ar1"  # or "tiny_tf"
+  horizons: [1,5,10,20]
+risk:
+  alpha: 0.01
+  horizon: 1
+  window: 250

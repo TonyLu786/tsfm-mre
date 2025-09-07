@@ -1,0 +1,19 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Data & outputs
+data/raw/*
+data/interim/*
+outputs/*
+!outputs/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db

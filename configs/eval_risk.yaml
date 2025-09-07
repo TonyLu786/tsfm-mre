@@ -1,0 +1,8 @@
+# Risk evaluation settings (documentation only)
+alpha_levels: [0.01, 0.025, 0.05]
+horizons: [1,5,10,20]
+basel_window: 250
+tests:
+  kupiec: true
+  christoffersen: true
+  es_backtest: true   # simplified in src/risk.py
