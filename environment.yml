@@ -10,6 +10,7 @@ dependencies:
   - pyarrow>=14.0
   - statsmodels>=0.14
   - pyyaml>=6.0
+  - pytest>=8.0
   - pip
   - pip:
       - pandas_datareader>=0.10

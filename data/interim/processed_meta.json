@@ -1,0 +1,7 @@
+{
+  "train_start": "2003-01-01",
+  "valid_start": "2003-06-02",
+  "test_start": "2003-09-01",
+  "end": "2003-12-31",
+  "hash": "a8b2abb8559b3c426db0d32063cd1f9754b1bf619d6ef986e6669b99cb363e10"
+}

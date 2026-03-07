@@ -1,0 +1,12 @@
+{
+  "mode": "synthetic",
+  "start": "2003-01-01",
+  "end": "2003-12-31",
+  "series": [
+    "DGS3MO",
+    "DGS2",
+    "DGS10"
+  ],
+  "rows": 783,
+  "hash": "ce57c439e2e6375020371d3d242ac79bf1e873b0559556e2d10c15d1719ac4ef"
+}

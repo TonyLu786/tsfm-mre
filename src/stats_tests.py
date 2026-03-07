@@ -1,192 +1,310 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-import argparse, os, re, numpy as np, pandas as pd
-from typing import List, Dict, Tuple
+﻿"""
+Statistical tests for comparing forecasting models.
+
+This module consumes one or more prediction tables (parquet or csv) using the
+schema produced by forecast.py:
+  origin, horizon, series, mean, q_0.01, q_0.025, q_0.05, ...
+
+It aligns realized values from data/interim/h15_processed.csv, computes loss
+series, and reports:
+- pairwise Diebold-Mariano p-values
+- White Reality Check p-value (simplified)
+- SPA p-value (simplified)
+"""
+import argparse
+import re
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
 from scipy import stats
 
-# -----------------------
-# 读取 pred_*.parquet 并抽取逐期损失
-# 要求列: ["model","series","timestamp","h","mean","q001","q025","q050","q095","q975","q990",...]
-# -----------------------
-def load_preds(paths: List[str], horizon: int) -> pd.DataFrame:
-    frames = []
-    for p in paths:
-        df = pd.read_parquet(p)
-        # 仅留指定地平线
-        df = df[df["h"] == horizon].copy()
-        # 从文件名推断模型名兜底
-        if "model" not in df.columns:
-            m = re.search(r"pred_(\w+)\.parquet$", p)
-            if m:
-                df["model"] = m.group(1)
-        frames.append(df)
-    out = pd.concat(frames, ignore_index=True)
-    out.sort_values(["timestamp","series","model"], inplace=True)
-    return out
+from utils import LOGGER, ensure_dir, read_prediction_table
 
-def crps_from_quantiles(row_q: np.ndarray, row_y: float, qs: np.ndarray) -> float:
-    # 简约 CRPS 近似：离散分位积分（论文/工具常用做法）
-    # row_q: [Q]  对应 qs: [Q]
-    indicators = (row_y <= row_q).astype(float)
-    return float(np.trapz((indicators - qs) ** 2, qs))
 
-def qloss(y: float, qhat: float, alpha: float) -> float:
-    e = y - qhat
-    return float(alpha * max(e,0.0) + (1 - alpha) * max(-e,0.0))
+def infer_model_name(path: Path) -> str:
+    m = re.search(r"pred_(.+)$", path.stem)
+    if m:
+        return m.group(1)
+    return path.stem
+
+
+def extract_quantile_columns(df: pd.DataFrame) -> Dict[float, str]:
+    qcols = {}
+    for col in df.columns:
+        if col.startswith("q_"):
+            try:
+                qcols[float(col.split("_", 1)[1])] = col
+                continue
+            except ValueError:
+                pass
+        m = re.match(r"^q(\d{3})$", col)
+        if m:
+            qcols[int(m.group(1)) / 1000.0] = col
+    return dict(sorted(qcols.items(), key=lambda kv: kv[0]))
+
+
+def choose_quantile_column(qcols: Dict[float, str], alpha: float) -> str:
+    if not qcols:
+        raise ValueError("No quantile columns found in predictions.")
+    level, col = min(qcols.items(), key=lambda kv: abs(kv[0] - alpha))
+    if abs(level - alpha) > 1e-9:
+        available = ", ".join([str(k) for k in qcols.keys()])
+        raise ValueError(f"No exact quantile for alpha={alpha}. Available levels: {available}")
+    return col
+
+
+def align_predictions_with_truth(pred: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    required_pred = {"origin", "horizon", "series", "mean"}
+    missing = required_pred - set(pred.columns)
+    if missing:
+        raise ValueError(f"Prediction file missing required columns: {sorted(missing)}")
+
+    pred = pred.copy()
+    pred["origin"] = pd.to_datetime(pred["origin"])
+    pred["horizon"] = pred["horizon"].astype(int)
+    pred["target_date"] = [
+        origin + pd.tseries.offsets.BDay(int(h)) for origin, h in zip(pred["origin"], pred["horizon"])
+    ]
+
+    truth_use = truth.copy()
+    truth_use["date"] = pd.to_datetime(truth_use["date"])
+    truth_use = truth_use.rename(columns={"date": "target_date", "value": "y"})
+
+    merged = pred.merge(
+        truth_use[["target_date", "series", "y"]],
+        on=["target_date", "series"],
+        how="inner",
+    )
+    return merged
+
+
+def crps_from_quantiles(row_q: np.ndarray, y: float, levels: np.ndarray) -> float:
+    indicators = (y <= row_q).astype(float)
+    return float(np.trapz((indicators - levels) ** 2, levels))
+
+
+def pinball_loss(y: float, qhat: float, alpha: float) -> float:
+    err = y - qhat
+    return float(alpha * max(err, 0.0) + (1.0 - alpha) * max(-err, 0.0))
+
 
 def build_losses(df: pd.DataFrame, metric: str, alpha: float) -> pd.DataFrame:
-    # y_true: 需要与仓库保持一致的命名；这里默认 preprocess 生成的 "y" 在 data/interim/test 中，
-    # 但 pred 文件中通常不含 y。最小改动：用同一 timestamp/series 去 data/interim/test.parquet 对齐。
-    # 若你已有 y 列，可直接合并或在这里读取后 merge。
-    # 为自包含，这里给出一个兜底：如果无 y 列，则跳过（你可在本仓库接入 y 的 merge）。
-    if "y" not in df.columns:
-        raise RuntimeError("pred parquet 需包含真实值列 y（或在此脚本中先 merge test 真值）；请在 forecast.py 写入 y。")
-    out = []
-    quantile_cols = sorted([c for c in df.columns if c.startswith("q") and c[1:].isdigit()],
-                           key=lambda c: int(c[1:]))
-    qs = np.array([int(c[1:])/1000.0 for c in quantile_cols], dtype=float)
-    for (_, g) in df.groupby(["timestamp","series","model"], sort=False):
-        y = float(g["y"].iloc[0])
-        rec = dict(timestamp=g["timestamp"].iloc[0], series=g["series"].iloc[0],
-                   model=g["model"].iloc[0])
-        if metric == "crps":
-            qvals = g[quantile_cols].iloc[0].to_numpy(dtype=float)
-            rec["loss"] = crps_from_quantiles(qvals, y, qs)
-        elif metric == "qloss":
-            col = f"q{int(round(alpha*1000)):03d}"
-            if col not in g.columns:
-                raise RuntimeError(f"缺少分位列 {col}，请在预测阶段产出该分位。")
-            rec["loss"] = qloss(y, float(g[col].iloc[0]), alpha)
+    out = df[["origin", "series", "horizon", "model", "y", "mean"]].copy()
+
+    if metric == "mse":
+        out["loss"] = (out["y"] - out["mean"]) ** 2
+    elif metric == "mae":
+        out["loss"] = (out["y"] - out["mean"]).abs()
+    else:
+        qcols = extract_quantile_columns(df)
+        if metric == "pinball":
+            qcol = choose_quantile_column(qcols, alpha)
+            out["loss"] = [pinball_loss(y, q, alpha) for y, q in zip(df["y"], df[qcol])]
+        elif metric == "crps":
+            levels = np.array(list(qcols.keys()), dtype=float)
+            cols = [qcols[l] for l in levels]
+            qmat = df[cols].to_numpy(dtype=float)
+            out["loss"] = [
+                crps_from_quantiles(row_q=qmat[i], y=float(df["y"].iloc[i]), levels=levels)
+                for i in range(len(df))
+            ]
         else:
-            raise ValueError("metric 仅支持 'crps' 或 'qloss'")
-        out.append(rec)
-    return pd.DataFrame(out)
+            raise ValueError("metric must be one of: crps, pinball, mse, mae")
 
-# -----------------------
-# 统计检验：DM / Reality Check / SPA
-# -----------------------
-def dm_test(loss_a: np.ndarray, loss_b: np.ndarray, block: int = 10) -> float:
-    # Diebold-Mariano (HAC/块自助近似)
-    d = loss_a - loss_b
-    T = len(d)
-    d_mean = d.mean()
-    # Newey-West 方差估计（滞后 L = block）
-    gamma0 = np.var(d, ddof=1)
-    s = gamma0
-    for lag in range(1, min(block, T-1)+1):
-        w = 1.0 - lag/(block+1.0)
-        cov = np.cov(d[:-lag], d[lag:])[0,1]
-        s += 2*w*cov
-    stat = d_mean / np.sqrt(s / T + 1e-12)
-    # 双尾
-    p = 2*(1 - stats.norm.cdf(abs(stat)))
-    return float(p)
+    return out[["origin", "series", "horizon", "model", "loss"]]
 
-def stationary_block_bootstrap(diffs: np.ndarray, B: int = 1000, p: float = 1/10) -> np.ndarray:
-    # Politis & Romano (1994) 稳态块自助法；期望块长 = 1/p
-    T = len(diffs)
-    out = np.zeros(B, dtype=float)
-    for b in range(B):
-        idx = []
-        while len(idx) < T:
-            if len(idx)==0 or np.random.rand() < p:
-                start = np.random.randint(0, T)
-            else:
-                start = (idx[-1] + 1) % T
-            idx.append(start)
-        out[b] = np.mean(diffs[idx[:T]])
-    return out
 
-def white_reality_check(loss_mat: np.ndarray, B: int = 2000, p: float = 1/10) -> float:
-    # 输入：shape [T, K]，为 (loss_benchmark - loss_model_k)，越大越好
-    T, K = loss_mat.shape
-    centered = loss_mat - loss_mat.mean(axis=0, keepdims=True)
-    # 统计量：max_k sqrt(T)*mean(centered[:,k])
-    stat = np.max(np.sqrt(T)*centered.mean(axis=0))
-    # bootstrap
-    boot_stats = []
-    for b in range(B):
-        gains = np.stack([stationary_block_bootstrap(centered[:,k], B=1, p=p) for k in range(K)], axis=1)
-        boot_stats.append(np.max(np.sqrt(T)*gains.mean(axis=0)))
-    pval = np.mean(np.array(boot_stats) >= stat)
-    return float(pval)
+def dm_test(loss_a: np.ndarray, loss_b: np.ndarray, hac_lags: int = 10) -> float:
+    d = np.asarray(loss_a, dtype=float) - np.asarray(loss_b, dtype=float)
+    d = d[np.isfinite(d)]
+    t = len(d)
+    if t < 5:
+        return np.nan
 
-def spa_test(loss_mat: np.ndarray, B: int = 2000, p: float = 1/10) -> float:
-    # Hansen (2005) SPA：与 RC 类似，但对劣质模型做截断修正，减少过度保守
-    T, K = loss_mat.shape
-    gains = loss_mat.copy()
-    # 截断：去除显著劣质的负向“收益”
-    gains = np.maximum(gains, 0.0)
-    stat = np.max(np.sqrt(T)*gains.mean(axis=0))
-    boot_stats = []
-    for b in range(B):
-        ghat = np.stack([stationary_block_bootstrap(gains[:,k], B=1, p=p) for k in range(K)], axis=1)
-        boot_stats.append(np.max(np.sqrt(T)*ghat.mean(axis=0)))
-    pval = np.mean(np.array(boot_stats) >= stat)
-    return float(pval)
+    d_mean = float(np.mean(d))
+    gamma0 = float(np.var(d, ddof=1))
+    max_lag = max(0, min(hac_lags, t - 1))
+    var_hac = gamma0
+    for lag in range(1, max_lag + 1):
+        w = 1.0 - lag / (max_lag + 1.0)
+        cov = float(np.cov(d[:-lag], d[lag:], ddof=0)[0, 1])
+        var_hac += 2.0 * w * cov
 
-def summarize(df_loss: pd.DataFrame, benchmark: str, outdir: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    os.makedirs(outdir, exist_ok=True)
+    if var_hac <= 0:
+        return np.nan
+    stat = d_mean / np.sqrt(var_hac / t)
+    return float(2.0 * (1.0 - stats.norm.cdf(abs(stat))))
+
+
+def stationary_bootstrap_indices(n: int, p: float, rng: np.random.Generator) -> np.ndarray:
+    idx = np.empty(n, dtype=int)
+    idx[0] = rng.integers(0, n)
+    for i in range(1, n):
+        if rng.random() < p:
+            idx[i] = rng.integers(0, n)
+        else:
+            idx[i] = (idx[i - 1] + 1) % n
+    return idx
+
+
+def white_reality_check(gains: np.ndarray, b: int, p: float, rng: np.random.Generator) -> float:
+    if gains.size == 0:
+        return 1.0
+    t = gains.shape[0]
+    stat = float(np.max(np.sqrt(t) * np.mean(gains, axis=0)))
+
+    centered = gains - np.mean(gains, axis=0, keepdims=True)
+    boot_stats = np.empty(b, dtype=float)
+    for i in range(b):
+        idx = stationary_bootstrap_indices(t, p, rng)
+        sample = centered[idx, :]
+        boot_stats[i] = float(np.max(np.sqrt(t) * np.mean(sample, axis=0)))
+    return float(np.mean(boot_stats >= stat))
+
+
+def spa_test(gains: np.ndarray, b: int, p: float, rng: np.random.Generator) -> float:
+    if gains.size == 0:
+        return 1.0
+    t = gains.shape[0]
+    truncated = np.maximum(gains, 0.0)
+    stat = float(np.max(np.sqrt(t) * np.mean(truncated, axis=0)))
+
+    centered = truncated - np.mean(truncated, axis=0, keepdims=True)
+    boot_stats = np.empty(b, dtype=float)
+    for i in range(b):
+        idx = stationary_bootstrap_indices(t, p, rng)
+        sample = centered[idx, :]
+        boot_stats[i] = float(np.max(np.sqrt(t) * np.mean(sample, axis=0)))
+    return float(np.mean(boot_stats >= stat))
+
+
+def summarize(
+    df_loss: pd.DataFrame,
+    benchmark: str,
+    outdir: str,
+    bootstrap_b: int,
+    bootstrap_p: float,
+    hac_lags: int,
+    seed: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    ensure_dir(outdir)
     models = sorted(df_loss["model"].unique())
-    # 均值损失
-    mean_loss = df_loss.groupby("model")["loss"].mean().to_dict()
-    # 成对 DM
-    dm_rows = []
-    for i, a in enumerate(models):
-        for j, b in enumerate(models):
-            if i == j: continue
-            la = df_loss[df_loss.model==a]["loss"].to_numpy()
-            lb = df_loss[df_loss.model==b]["loss"].to_numpy()
-            dm_rows.append({"A": a, "B": b, "p_dm": dm_test(la, lb)})
+    if benchmark not in models:
+        raise ValueError(f"Benchmark model '{benchmark}' not found in losses. Models={models}")
+
+    keys = ["origin", "series", "horizon"]
+    dm_rows: List[Dict[str, object]] = []
+    for a in models:
+        for b in models:
+            if a == b:
+                continue
+            left = df_loss[df_loss["model"] == a][keys + ["loss"]].rename(columns={"loss": "loss_a"})
+            right = df_loss[df_loss["model"] == b][keys + ["loss"]].rename(columns={"loss": "loss_b"})
+            merged = left.merge(right, on=keys, how="inner")
+            p_dm = dm_test(merged["loss_a"].to_numpy(), merged["loss_b"].to_numpy(), hac_lags=hac_lags)
+            dm_rows.append({"A": a, "B": b, "n": int(len(merged)), "p_dm": p_dm})
     dm_tbl = pd.DataFrame(dm_rows)
-    # RC / SPA：以基准的差值为正向收益
-    bench_loss = df_loss[df_loss.model==benchmark]["loss"].to_numpy()
-    K_models = [m for m in models if m != benchmark]
-    gains = []
-    for m in K_models:
-        lm = df_loss[df_loss.model==m]["loss"].to_numpy()
-        gains.append(bench_loss - lm)
-    gain_mat = np.stack(gains, axis=1) if len(gains)>0 else np.zeros((len(bench_loss),0))
-    rc_p = white_reality_check(gain_mat) if gain_mat.shape[1]>0 else 1.0
-    spa_p = spa_test(gain_mat) if gain_mat.shape[1]>0 else 1.0
 
-    summary = []
-    for m in models:
-        summary.append({
-            "model": m,
-            "mean_loss": mean_loss[m],
-            "rel_improvement_vs_%s"%benchmark: (mean_loss[benchmark]-mean_loss[m])/mean_loss[benchmark] if m!=benchmark else 0.0,
-            "rc_p_value": rc_p if m!=benchmark else np.nan,
-            "spa_p_value": spa_p if m!=benchmark else np.nan
-        })
-    sum_df = pd.DataFrame(summary).sort_values("mean_loss")
-    sum_df.to_csv(os.path.join(outdir, "stats_summary.csv"), index=False)
-    dm_tbl.to_csv(os.path.join(outdir, "pairwise_dm.csv"), index=False)
+    pivot = df_loss.pivot_table(index=keys, columns="model", values="loss", aggfunc="mean")
+    pivot = pivot.dropna(axis=0, how="any")
+    bench_series = pivot[benchmark]
+    contenders = [m for m in models if m != benchmark]
+    gains = np.column_stack([(bench_series - pivot[m]).to_numpy() for m in contenders]) if contenders else np.zeros((len(bench_series), 0))
+    rng = np.random.default_rng(seed)
+    rc_p = white_reality_check(gains, b=bootstrap_b, p=bootstrap_p, rng=rng)
+    spa_p = spa_test(gains, b=bootstrap_b, p=bootstrap_p, rng=rng)
 
-    # Markdown 摘要
-    with open(os.path.join(outdir, "stats_summary.md"), "w", encoding="utf-8") as f:
-        f.write("| model | mean_loss | rel_improve_vs_%s | rc_p | spa_p |\n" % benchmark)
+    mean_loss = df_loss.groupby("model", as_index=False)["loss"].mean().rename(columns={"loss": "mean_loss"})
+    bench_mean = float(mean_loss[mean_loss["model"] == benchmark]["mean_loss"].iloc[0])
+
+    summary_rows = []
+    rel_col = f"rel_improvement_vs_{benchmark}"
+    for _, row in mean_loss.sort_values("mean_loss").iterrows():
+        model = row["model"]
+        m_loss = float(row["mean_loss"])
+        rel = 0.0 if model == benchmark else (bench_mean - m_loss) / bench_mean
+        summary_rows.append(
+            {
+                "model": model,
+                "mean_loss": m_loss,
+                rel_col: rel,
+                "rc_p_value": np.nan if model == benchmark else rc_p,
+                "spa_p_value": np.nan if model == benchmark else spa_p,
+            }
+        )
+
+    sum_df = pd.DataFrame(summary_rows)
+    sum_df.to_csv(Path(outdir) / "stats_summary.csv", index=False)
+    dm_tbl.to_csv(Path(outdir) / "pairwise_dm.csv", index=False)
+
+    with open(Path(outdir) / "stats_summary.md", "w", encoding="utf-8") as f:
+        f.write(f"| model | mean_loss | rel_improve_vs_{benchmark} | rc_p | spa_p |\n")
         f.write("|---|---:|---:|---:|---:|\n")
-        for _, r in sum_df.iterrows():
-            f.write(f"| {r['model']} | {r['mean_loss']:.6f} | {100*r['rel_improvement_vs_%s'%benchmark]:.2f}% | "
-                    f"{'' if pd.isna(r['rc_p_value']) else f'{r['rc_p_value']:.4f}'} | "
-                    f"{'' if pd.isna(r['spa_p_value']) else f'{r['spa_p_value']:.4f}'} |\n")
+        for _, row in sum_df.iterrows():
+            rc_str = "" if pd.isna(row["rc_p_value"]) else f"{row['rc_p_value']:.4f}"
+            spa_str = "" if pd.isna(row["spa_p_value"]) else f"{row['spa_p_value']:.4f}"
+            rel_val = f"{100.0 * float(row[rel_col]):.2f}%"
+            f.write(f"| {row['model']} | {row['mean_loss']:.6f} | {rel_val} | {rc_str} | {spa_str} |\n")
+
     return sum_df, dm_tbl
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pred", type=str, nargs="+", required=True,
-                    help="list of pred_*.parquet across models")
+    ap.add_argument("--pred", type=str, nargs="+", required=True, help="prediction tables across models")
+    ap.add_argument("--truth", type=str, default="data/interim/h15_processed.csv")
     ap.add_argument("--horizon", type=int, default=1)
-    ap.add_argument("--metric", type=str, default="crps", choices=["crps","qloss"])
+    ap.add_argument("--metric", type=str, default="crps", choices=["crps", "pinball", "mse", "mae"])
     ap.add_argument("--alpha", type=float, default=0.01)
     ap.add_argument("--benchmark", type=str, default="ar1")
+    ap.add_argument("--bootstrap_B", type=int, default=500)
+    ap.add_argument("--bootstrap_p", type=float, default=0.1)
+    ap.add_argument("--hac_lags", type=int, default=10)
+    ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--outdir", type=str, default="outputs/stats")
     args = ap.parse_args()
 
-    df = load_preds(args.pred, args.horizon)
-    df_loss = build_losses(df, args.metric, args.alpha)
-    summarize(df_loss, args.benchmark, args.outdir)
+    truth = pd.read_csv(args.truth, parse_dates=["date"])
+
+    all_losses = []
+    for path in args.pred:
+        pred_df, resolved = read_prediction_table(path)
+        model = infer_model_name(Path(resolved))
+        if "model" in pred_df.columns:
+            pred_df["model"] = pred_df["model"].astype(str)
+        else:
+            pred_df["model"] = model
+
+        pred_df = pred_df[pred_df["horizon"] == args.horizon].copy()
+        if pred_df.empty:
+            LOGGER.warning("Skipping %s: no rows for horizon=%s", resolved, args.horizon)
+            continue
+
+        aligned = align_predictions_with_truth(pred_df, truth)
+        if aligned.empty:
+            LOGGER.warning("Skipping %s: no aligned realized values", resolved)
+            continue
+
+        losses = build_losses(aligned, metric=args.metric, alpha=args.alpha)
+        all_losses.append(losses)
+
+    if not all_losses:
+        raise RuntimeError("No loss rows produced. Check input predictions and truth data range.")
+
+    df_loss = pd.concat(all_losses, ignore_index=True)
+    sum_df, dm_tbl = summarize(
+        df_loss,
+        benchmark=args.benchmark,
+        outdir=args.outdir,
+        bootstrap_b=args.bootstrap_B,
+        bootstrap_p=args.bootstrap_p,
+        hac_lags=args.hac_lags,
+        seed=args.seed,
+    )
+    LOGGER.info("Saved stats summary to %s (models=%s, comparisons=%s)", args.outdir, len(sum_df), len(dm_tbl))
+
 
 if __name__ == "__main__":
     main()

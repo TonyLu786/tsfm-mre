@@ -1,0 +1,8 @@
+﻿# Statistical model comparison settings
+metric: crps
+alpha: 0.01
+benchmark: ar1
+horizon: 1
+bootstrap_B: 500
+bootstrap_p: 0.1
+hac_lags: 10

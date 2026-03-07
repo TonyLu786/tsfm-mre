@@ -2,8 +2,8 @@
 Forecasting script producing distributional forecasts for multiple horizons
 via simple AR(1) (per series) and a tiny Transformer (optional, PyTorch).
 
-Outputs a Parquet with columns:
-[origin, horizon, series, mean, q_0.01, q_0.025, q_0.05, samples_json]
+Outputs a prediction table with columns:
+[origin, horizon, series, mean, q_0.01, q_0.025, q_0.05]
 
 Usage:
 python forecast.py --indir data/interim --outdir outputs/forecasts --model ar1 --horizons 1 5 10 20 --context 60
@@ -11,12 +11,10 @@ python forecast.py --indir data/interim --outdir outputs/forecasts --model ar1 -
 import argparse
 import json
 from pathlib import Path
-from typing import List, Dict
 import numpy as np
 import pandas as pd
-from utils import ensure_dir, LOGGER, robust_zscore_fit, inverse_robust_zscore
+from utils import ensure_dir, LOGGER, write_prediction_table
 from utils import set_seed
-import warnings
 
 try:
     import statsmodels.api as sm
@@ -108,10 +106,9 @@ def tiny_transformer_forecast(y: np.ndarray, h: int, B: int=1000, epochs: int=5,
 
     # MC-dropout sampling for h steps
     model.train()  # keep dropout on
-    import torch.nn.functional as F
     last = seq[-context:, :].unsqueeze(0)  # [1,context,1]
     samples = []
-    for b in range(B):
+    for _ in range(B):
         cur = last.clone()
         yt = None
         for _ in range(h):
@@ -136,17 +133,16 @@ def main():
     set_seed(args.seed)
 
     df = pd.read_csv(Path(args.indir)/"h15_processed.csv", parse_dates=["date"])
-    meta = json.load(open(Path(args.indir)/"processed_meta.json","r"))
-    scalers = json.load(open(Path(args.indir)/"scalers.json","r"))
-    valid_start = pd.Timestamp(meta["valid_start"]); test_start = pd.Timestamp(meta["test_start"]); end = pd.Timestamp(meta["end"])
+    with open(Path(args.indir)/"processed_meta.json", "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    valid_start = pd.Timestamp(meta["valid_start"])
+    end = pd.Timestamp(meta["end"])
 
     res = []
     for s, g in df.groupby("series"):
         g = g.sort_values("date").reset_index(drop=True)
         dates = g["date"]
-        vals = g["value"].values.astype(float)
-        params = scalers[s]
-        # rolling origins from valid_start to end- max(h)
+        # rolling origins from valid_start to end
         for t_idx in range(len(g)):
             t_date = dates.iloc[t_idx]
             if t_date < valid_start or t_date >= end:
@@ -156,12 +152,7 @@ def main():
             if len(hist) < args.context + 5:
                 continue
             if args.model == "ar1":
-                sims = ar1_forecast_dist(hist, h=1, B=args.B)
-                # multi-step via iterating
-                # store entire horizon samples by iterating using AR1 recursively per sample
-                # Simplify: approximate by scaling variance sqrt(h) for speed
                 for h in args.horizons:
-                    # gaussian approx using AR1 one-step sigma scaling (already in function)
                     sims_h = ar1_forecast_dist(hist, h=h, B=args.B)
                     q01, q025, q05 = np.quantile(sims_h, [0.01,0.025,0.05])
                     mean = sims_h.mean()
@@ -177,9 +168,9 @@ def main():
 
     out = pd.DataFrame(res)
     out = out.sort_values(["series","origin","horizon"]).reset_index(drop=True)
-    out_path = Path(args.outdir)/f"pred_{args.model}.parquet"
-    out.to_parquet(out_path, index=False)
-    LOGGER.info(f"Wrote forecasts to {out_path} ({len(out)} rows)")
+    preferred_path = Path(args.outdir)/f"pred_{args.model}.parquet"
+    written_path = write_prediction_table(out, preferred_path)
+    LOGGER.info(f"Wrote forecasts to {written_path} ({len(out)} rows)")
 
 if __name__ == "__main__":
     main()

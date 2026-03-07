@@ -7,49 +7,70 @@ Usage:
 python risk.py --indir data/interim --pred outputs/forecasts/pred_ar1.parquet --outdir outputs/risk --alpha 0.01 --window 250
 """
 import argparse
-import json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from utils import ensure_dir, LOGGER
+from scipy.stats import chi2
 
-def kupiec_pof(exceedances: np.ndarray, alpha: float):
-    # Number of observations and failures
-    x = exceedances.sum()
-    n = exceedances.size
-    if x == 0 or x == n:  # edge cases
+from utils import ensure_dir, LOGGER, read_prediction_table
+
+EPS = 1e-12
+
+
+def _safe_loglik_bernoulli(p: float, n1: int, n0: int) -> float:
+    p = float(np.clip(p, EPS, 1.0 - EPS))
+    return n1 * np.log(p) + n0 * np.log(1.0 - p)
+
+
+def kupiec_lr(exceedances: np.ndarray, alpha: float):
+    x = int(np.sum(exceedances))
+    n = int(exceedances.size)
+    if n == 0:
         return np.nan, x, n
     p_hat = x / n
-    LR = -2 * ( (n - x)*np.log((1 - alpha)/(1 - p_hat)) + x*np.log(alpha/p_hat) )
-    from scipy.stats import chi2
-    p = 1 - chi2.cdf(LR, df=1)
-    return p, x, n
+    ll0 = _safe_loglik_bernoulli(alpha, x, n - x)
+    ll1 = _safe_loglik_bernoulli(p_hat, x, n - x)
+    lr = -2.0 * (ll0 - ll1)
+    return float(lr), x, n
+
+def kupiec_pof(exceedances: np.ndarray, alpha: float):
+    lr, x, n = kupiec_lr(exceedances, alpha)
+    if np.isnan(lr):
+        return np.nan, x, n
+    return float(1.0 - chi2.cdf(lr, df=1)), x, n
 
 def christoffersen_cc(indicators: np.ndarray, alpha: float):
-    # independence through 2x2 transition matrix
+    if len(indicators) < 2:
+        return np.nan, np.nan, np.nan
+
+    # Independence through 2x2 transition matrix.
     n00 = n01 = n10 = n11 = 0
     for i in range(1, len(indicators)):
-        prev = indicators[i-1]
+        prev = indicators[i - 1]
         curr = indicators[i]
-        if prev==0 and curr==0: n00+=1
-        if prev==0 and curr==1: n01+=1
-        if prev==1 and curr==0: n10+=1
-        if prev==1 and curr==1: n11+=1
+        if prev == 0 and curr == 0:
+            n00 += 1
+        elif prev == 0 and curr == 1:
+            n01 += 1
+        elif prev == 1 and curr == 0:
+            n10 += 1
+        else:
+            n11 += 1
+
     pi0 = n01 / max(n00 + n01, 1)
     pi1 = n11 / max(n10 + n11, 1)
-    pi  = (n01 + n11) / max(n00 + n01 + n10 + n11, 1)
-    from math import log
-    def L(p, n1, n0): 
-        if p<=0 or p>=1:
-            return -np.inf
-        return n1*log(p) + n0*log(1-p)
-    LRind = -2*( L(pi, n01+n11, n00+n10) - (L(pi0, n01, n00) + L(pi1, n11, n10)) )
-    from scipy.stats import chi2
-    p_ind = 1 - chi2.cdf(LRind, df=1)
-    # unconditional coverage (Kupiec) p-value re-used
+    pi = (n01 + n11) / max(n00 + n01 + n10 + n11, 1)
+    ll_ind_null = _safe_loglik_bernoulli(pi, n01 + n11, n00 + n10)
+    ll_ind_alt = _safe_loglik_bernoulli(pi0, n01, n00) + _safe_loglik_bernoulli(pi1, n11, n10)
+    lr_ind = -2.0 * (ll_ind_null - ll_ind_alt)
+    p_ind = float(1.0 - chi2.cdf(lr_ind, df=1))
+
+    lr_uc, _, _ = kupiec_lr(indicators, alpha)
     p_uc, _, _ = kupiec_pof(indicators, alpha)
-    LRcc = -2*( L(pi, n01+n11, n00+n10) - (L(alpha, n01+n11, n00+n10)) )
-    p_cc = 1 - chi2.cdf(LRcc, df=2)
+    if np.isnan(lr_uc):
+        return p_uc, p_ind, np.nan
+    lr_cc = lr_uc + lr_ind
+    p_cc = float(1.0 - chi2.cdf(lr_cc, df=2))
     return p_uc, p_ind, p_cc
 
 def expected_shortfall(y: np.ndarray, var_level: float):
@@ -71,32 +92,35 @@ def basel_traffic_light(exceedances_count: int, window: int=250, alpha: float=0.
     else:
         return "red"
 
+def pick_quantile_column(df_pred: pd.DataFrame, alpha: float) -> str:
+    quantile_cols = {}
+    for col in df_pred.columns:
+        if not col.startswith("q_"):
+            continue
+        try:
+            quantile_cols[col] = float(col.split("_", 1)[1])
+        except ValueError:
+            continue
+    if not quantile_cols:
+        raise ValueError("Prediction table has no quantile columns like q_0.01.")
+    best_col, best_alpha = min(quantile_cols.items(), key=lambda item: abs(item[1] - alpha))
+    if abs(best_alpha - alpha) > 1e-9:
+        available = ", ".join(sorted(quantile_cols))
+        raise ValueError(f"No exact quantile for alpha={alpha}. Available: {available}")
+    return best_col
+
 def rolling_backtest(df_true: pd.DataFrame, df_pred: pd.DataFrame, alpha: float, window: int, horizon: int):
     # Align realized y_{t+h} with VaR_t(h)
     # df_true columns: date, series, value
     # df_pred columns: origin, horizon, series, q_0.01/q_0.025/q_0.05
-    key = f"q_{alpha:.3f}" if alpha>=0.01 else f"q_{alpha:.2f}"
-    if key not in df_pred.columns:
-        # fallback mapping for 0.01/0.025/0.05
-        if abs(alpha-0.01)<1e-6: key="q_0.01"
-        elif abs(alpha-0.025)<1e-6: key="q_0.025"
-        elif abs(alpha-0.05)<1e-6: key="q_0.05"
-        else: 
-            raise ValueError("Unsupported alpha quantile in predictions.")
-    rows = []
-    for s, gpred in df_pred[df_pred["horizon"]==horizon].groupby("series"):
-        gtrue = df_true[df_true["series"]==s].copy()
-        gtrue = gtrue.sort_values("date").reset_index(drop=True)
-        # realized at t+h
-        for i in range(len(gpred)):
-            t = pd.Timestamp(gpred.iloc[i]["origin"])
-            var_t = gpred.iloc[i][key]
-            # realized date
-            t_h = t + pd.tseries.offsets.BDay(horizon)
-            y = gtrue[gtrue["date"]==t_h]["value"]
-            if len(y)==1:
-                rows.append({"date": t_h, "series": s, "VaR": var_t, "y": float(y.values[0])})
-    out = pd.DataFrame(rows).sort_values(["series","date"]).reset_index(drop=True)
+    key = pick_quantile_column(df_pred, alpha)
+    pred = df_pred[df_pred["horizon"] == horizon][["origin", "series", key]].copy()
+    pred["date"] = pred["origin"] + pd.to_timedelta(0, unit="D")
+    pred["date"] = [d + pd.tseries.offsets.BDay(horizon) for d in pred["date"]]
+    pred = pred.rename(columns={key: "VaR"})
+    true_df = df_true.rename(columns={"value": "y"})
+    out = pred.merge(true_df[["date", "series", "y"]], on=["date", "series"], how="inner")
+    out = out.sort_values(["series", "date"]).reset_index(drop=True)
     # compute exceedances and rolling counts
     out["exceed"] = (out["y"] < out["VaR"]).astype(int)
     out["window"] = window
@@ -114,9 +138,14 @@ def main():
 
     ensure_dir(args.outdir)
     df_true = pd.read_csv(Path(args.indir)/"h15_processed.csv", parse_dates=["date"])
-    df_pred = pd.read_parquet(args.pred)
+    df_pred, pred_path = read_prediction_table(args.pred)
+    LOGGER.info(f"Using prediction file: {pred_path}")
     # backtest per series
     bt = rolling_backtest(df_true[["date","series","value"]], df_pred, args.alpha, args.window, args.horizon)
+    if bt.empty:
+        raise RuntimeError(
+            "Backtest alignment produced zero rows. Check prediction horizons and available truth dates."
+        )
     results = []
     for s, gs in bt.groupby("series"):
         p_k, x, n = kupiec_pof(gs["exceed"].values, args.alpha)

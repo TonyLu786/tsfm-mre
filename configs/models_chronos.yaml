@@ -1,0 +1,7 @@
+﻿# Optional Chronos model settings (documentation/template)
+model: chronos
+provider: huggingface
+model_id: amazon/chronos-t5-tiny
+context: 60
+horizons: [1, 5, 10, 20]
+quantiles: [0.01, 0.025, 0.05]

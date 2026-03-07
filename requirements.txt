@@ -6,3 +6,4 @@ pyarrow>=14.0
 statsmodels>=0.14
 pyyaml>=6.0
 pandas_datareader>=0.10  # optional, for --mode fred
+pytest>=8.0

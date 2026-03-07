@@ -1,0 +1,7 @@
+﻿# Optional TimeSFM model settings (documentation/template)
+model: timesfm
+provider: huggingface
+model_id: google/timesfm-1.0-200m
+context: 60
+horizons: [1, 5, 10, 20]
+quantiles: [0.01, 0.025, 0.05]
