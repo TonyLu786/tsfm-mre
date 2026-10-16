@@ -1,0 +1,36 @@
+# U.S. Treasury constant-maturity yields from the Federal Reserve H.15 release (via FRED).
+name: fred_h15
+seed: 20251017
+
+data:
+  source: fred
+  series: [DGS3MO, DGS2, DGS10]
+  start: 2003-01-01
+  end: 2025-12-31
+  cache_dir: data/raw/fred   # downloads are cached here with their SHA-256
+
+evaluation:
+  start: 2019-01-02          # first forecast origin; models are re-estimated at every origin
+  horizons: [1, 5, 10, 20]   # trading days
+
+models:
+  - name: rw_ewma            # random walk with RiskMetrics volatility
+    decay: 0.94
+  - name: ar1                # Gaussian AR(1), expanding window
+  - name: hs                 # historical simulation of h-day changes
+    window: 500
+
+risk:
+  horizon: 1
+  var_alpha: 0.01            # VaR at 99%
+  es_alpha: 0.025            # ES at 97.5%
+  basel_window: 250
+  es_simulations: 2000
+
+comparison:
+  benchmark: rw_ewma
+  bootstrap_reps: 1000
+  mean_block_length: 10
+
+report:
+  focus_series: DGS10

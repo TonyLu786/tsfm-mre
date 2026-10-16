@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying paper."
+title: "TSFM-MRE: Minimal Reproducible Experiment for Time-Series Foundation Models in Finance"
+abstract: >-
+  Reproducible, risk-aware evaluation of probabilistic forecasts for financial time
+  series: proper scoring rules, VaR and expected-shortfall backtests, and Reality Check
+  and SPA tests, applied to U.S. Treasury yields from the Federal Reserve H.15 release.
+type: software
+authors:
+  - family-names: Lu
+    given-names: Juntong
+    orcid: "https://orcid.org/0009-0007-3301-6526"
+version: "1.0.0"
+date-released: "2026-10-16"
+license: MIT
+repository-code: "https://github.com/TonyLu786/tsfm-mre"
+keywords:
+  - time-series foundation models
+  - probabilistic forecasting
+  - forecast evaluation
+  - value at risk
+  - expected shortfall
+  - backtesting
+  - superior predictive ability
+  - yield curve
+preferred-citation:
+  type: conference-paper
+  title: >-
+    Time-Series Foundation Models in Finance: Pretraining Corpora, Architectures,
+    Financial Benchmarks, and Risk-Aware Evaluation
+  authors:
+    - family-names: Lu
+      given-names: Juntong
+      orcid: "https://orcid.org/0009-0007-3301-6526"
+  collection-title: >-
+    Proceedings of the 2025 2nd International Conference on Digital Economy and
+    Computer Science
+  conference:
+    name: "DECS 2025: 2025 2nd International Conference on Digital Economy and Computer Science"
+    city: Wuhan
+    country: CN
+  publisher:
+    name: Association for Computing Machinery
+    city: New York
+    country: US
+  start: 144
+  end: 151
+  year: 2025
+  month: 10
+  doi: "10.1145/3785706.3785728"

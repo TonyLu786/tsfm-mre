@@ -1,0 +1,31 @@
+# Small offline configuration used by the test suite and continuous integration.
+name: smoke
+seed: 7
+
+data:
+  source: synthetic
+  series: [DGS3MO, DGS10]
+  start: 2014-01-01
+  end: 2017-12-31
+
+evaluation:
+  start: 2017-01-03
+  horizons: [1, 5]
+
+models:
+  - name: rw_ewma
+  - name: ar1
+  - name: hs
+    window: 250
+
+risk:
+  horizon: 1
+  es_simulations: 199
+
+comparison:
+  benchmark: rw_ewma
+  bootstrap_reps: 199
+  mean_block_length: 5
+
+report:
+  focus_series: DGS10
