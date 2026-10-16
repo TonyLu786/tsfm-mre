@@ -1,0 +1,26 @@
+name: Bug report
+description: Report incorrect results, failures or unexpected behaviour
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Configuration file or command, and the error message if any.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: The `tsfm_mre`, `python`, `platform` and `dependencies` fields of `manifest.json`, or the output of `tsfm-mre --version`.
+    validations:
+      required: true

@@ -1,0 +1,16 @@
+name: Feature request
+description: Propose a model, test, data source or report element
+labels: [enhancement]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should be added, and how would it be used?
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Papers or documentation that define the method, if applicable.
