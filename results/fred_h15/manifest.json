@@ -1,0 +1,134 @@
+{
+  "tsfm_mre": "1.0.0",
+  "created_utc": "2026-10-16T08:31:01+00:00",
+  "runtime_seconds": 13.56,
+  "git": {
+    "commit": "de2e943b8d91f72d143e1ce87c1c1d66bb31baff",
+    "clean": true
+  },
+  "python": "3.12.6",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "dependencies": {
+    "numpy": "2.2.6",
+    "pandas": "2.2.3",
+    "scipy": "1.14.1",
+    "matplotlib": "3.11.1",
+    "PyYAML": "6.0.2"
+  },
+  "config": {
+    "name": "fred_h15",
+    "seed": 20251017,
+    "data": {
+      "source": "fred",
+      "series": [
+        "DGS3MO",
+        "DGS2",
+        "DGS10"
+      ],
+      "start": "2003-01-01",
+      "end": "2025-12-31",
+      "cache_dir": "data/raw/fred",
+      "path": null,
+      "resolution": null
+    },
+    "evaluation": {
+      "start": "2019-01-02",
+      "horizons": [
+        1,
+        5,
+        10,
+        20
+      ]
+    },
+    "models": [
+      {
+        "name": "rw_ewma",
+        "decay": 0.94
+      },
+      {
+        "name": "ar1"
+      },
+      {
+        "name": "hs",
+        "window": 500
+      }
+    ],
+    "risk": {
+      "horizon": 1,
+      "var_alpha": 0.01,
+      "es_alpha": 0.025,
+      "basel_window": 250,
+      "es_simulations": 2000
+    },
+    "comparison": {
+      "benchmark": "rw_ewma",
+      "bootstrap_reps": 1000,
+      "mean_block_length": 10
+    },
+    "report": {
+      "focus_series": "DGS10"
+    }
+  },
+  "models": {
+    "rw_ewma": {
+      "class": "RandomWalkEWMA",
+      "decay": 0.94,
+      "warmup": 60
+    },
+    "ar1": {
+      "class": "AR1",
+      "window": null,
+      "min_obs": 250
+    },
+    "hs": {
+      "class": "HistoricalSimulation",
+      "window": 500
+    }
+  },
+  "data": {
+    "source": "fred",
+    "description": "FRED, H.15 Selected Interest Rates: market yield on U.S. Treasury securities at constant maturity, daily, percent",
+    "files": [
+      {
+        "series": "DGS3MO",
+        "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS3MO&cosd=2003-01-01&coed=2025-12-31",
+        "retrieved_utc": "2026-10-16T02:50:35+00:00",
+        "sha256": "1f857c01381ab8e534f929c5925061990765da1d5fadf83d4133b1c373aa37b6",
+        "cache_file": "DGS3MO_2003-01-01_2025-12-31.csv"
+      },
+      {
+        "series": "DGS2",
+        "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2&cosd=2003-01-01&coed=2025-12-31",
+        "retrieved_utc": "2026-10-16T02:50:36+00:00",
+        "sha256": "679947ea52eed3b3875e4169e51705874dad0495eec7215dfda87ce34ec2604b",
+        "cache_file": "DGS2_2003-01-01_2025-12-31.csv"
+      },
+      {
+        "series": "DGS10",
+        "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10&cosd=2003-01-01&coed=2025-12-31",
+        "retrieved_utc": "2026-10-16T02:50:37+00:00",
+        "sha256": "33f3daa37d10a628594de05fbac6d1bff44ec5071474590b7d66b25227f34a49",
+        "cache_file": "DGS10_2003-01-01_2025-12-31.csv"
+      }
+    ],
+    "non_trading_dates_dropped": 247,
+    "resolution": 0.01,
+    "panel_sha256": "ac588b228accbe8fc7f80d5d714c828acd197ca407a89528f0817bf65c00dcdd"
+  },
+  "outputs": {
+    "comparison_joint.csv": "0a43cdaf3bc0644e4e66359a723651ad86e4849483a5018386cd89397229c806",
+    "comparison_pairwise.csv": "5219ca2cd046d6ae52a56f0a3d3b0d1f37c3beccba00df23a50c361b51216bac",
+    "figures/intervals.png": "c0ac9aa36ff5992b8b61402f5b1a2b542345fad1d783f9a8929b91d56de9cecf",
+    "figures/pit.png": "9a94fd834e474e113cde26eff15acd4995792937879b38fc860ef6c307b02062",
+    "figures/rolling_exceedances.png": "5fbaedd221c9e95176addebe6ab7787f9e8d3e2181a11a418eedf2bab67263d3",
+    "figures/scores_by_horizon.png": "25178b0e49e224ea2c42ad6f00961e4b2c83c998f8f48538f460c153d83d8ea7",
+    "metrics.csv": "7666b72752bcc81524341bd00190cc33791ec4ecd99721ce674a4bb4e73ccca2",
+    "predictions/ar1.csv.gz": "07bfcf9ccccc7014ae48e53f8cd4239910fa29c2efad8792e3720b8a60f7943c",
+    "predictions/hs.csv.gz": "9158e9b76f381240e993dd80501641b3b4f1adb395fd3794595c64f8b4c9f22a",
+    "predictions/rw_ewma.csv.gz": "99e5456b3371652ed8168f1bab3e79f687ad45ec2c073bfe7df123070803f968",
+    "report.html": "a39459cff2594214537d73a48b7d59b1cae3e46a964dd0d41cc55a37d1f4cd7e",
+    "risk.csv": "3b0111e161ada99aa438bdfc262a2e11a7c91000e4941fed90ad38dc8b75dfaa",
+    "summary.md": "a02badd315bae7aef7fc0d0c9f5fa081f224f464af0778ee31471ee4ae3ae5fc"
+  },
+  "command": "tsfm-mre run configs/fred_h15.yaml --out results/fred_h15"
+}

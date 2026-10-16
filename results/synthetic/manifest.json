@@ -1,0 +1,111 @@
+{
+  "tsfm_mre": "1.0.0",
+  "created_utc": "2026-10-16T08:30:46+00:00",
+  "runtime_seconds": 15.07,
+  "git": {
+    "commit": "de2e943b8d91f72d143e1ce87c1c1d66bb31baff",
+    "clean": true
+  },
+  "python": "3.12.6",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "dependencies": {
+    "numpy": "2.2.6",
+    "pandas": "2.2.3",
+    "scipy": "1.14.1",
+    "matplotlib": "3.11.1",
+    "PyYAML": "6.0.2"
+  },
+  "config": {
+    "name": "synthetic",
+    "seed": 20251017,
+    "data": {
+      "source": "synthetic",
+      "series": [
+        "DGS3MO",
+        "DGS2",
+        "DGS10"
+      ],
+      "start": "2003-01-01",
+      "end": "2025-12-31",
+      "cache_dir": "data/raw/fred",
+      "path": null,
+      "resolution": null
+    },
+    "evaluation": {
+      "start": "2019-01-02",
+      "horizons": [
+        1,
+        5,
+        10,
+        20
+      ]
+    },
+    "models": [
+      {
+        "name": "rw_ewma",
+        "decay": 0.94
+      },
+      {
+        "name": "ar1"
+      },
+      {
+        "name": "hs",
+        "window": 500
+      }
+    ],
+    "risk": {
+      "horizon": 1,
+      "var_alpha": 0.01,
+      "es_alpha": 0.025,
+      "basel_window": 250,
+      "es_simulations": 2000
+    },
+    "comparison": {
+      "benchmark": "rw_ewma",
+      "bootstrap_reps": 1000,
+      "mean_block_length": 10
+    },
+    "report": {
+      "focus_series": "DGS10"
+    }
+  },
+  "models": {
+    "rw_ewma": {
+      "class": "RandomWalkEWMA",
+      "decay": 0.94,
+      "warmup": 60
+    },
+    "ar1": {
+      "class": "AR1",
+      "window": null,
+      "min_obs": 250
+    },
+    "hs": {
+      "class": "HistoricalSimulation",
+      "window": 500
+    }
+  },
+  "data": {
+    "source": "synthetic",
+    "description": "Nelson-Siegel three-factor model with GARCH(1,1) Student-t shocks, stress episodes and a smooth zero floor, calibrated to daily H.15 dynamics",
+    "seed": 20251017,
+    "resolution": 0.0,
+    "panel_sha256": "7f580accd3c8fbc749ff041b8d47a5626141cf89eaf3bc18f22e7b4dbb891f24"
+  },
+  "outputs": {
+    "comparison_joint.csv": "6d907a182aeffea09967d4a492c133e6d583e50a573554476d7cf4c001b7976c",
+    "comparison_pairwise.csv": "ca606b0a072c6d72b803287d7a2b30638e3fed1ce92619cd85b9fba5fe0a3840",
+    "figures/intervals.png": "b9c531bfa482e95cf1b2130e6cd64980347516fd803d0c9d6d208c528f4e6e51",
+    "figures/pit.png": "d20533f67a1e26e700db0db79431ea87b43c5a6b5a7c11862e7991a2fdf41b0a",
+    "figures/rolling_exceedances.png": "20fb079769378e0a03f24ab16321ce64603fa3c5ef252134e4c529969622b511",
+    "figures/scores_by_horizon.png": "4cfe4503a3b06f9b2a9b4eab0911379c22e76300bcf0c97f75739a7eda85166f",
+    "metrics.csv": "c740ea88be7fccf979c6ec4ab39225d05688ac19cad97ff7c2627c267a89202c",
+    "predictions/ar1.csv.gz": "04cc2c10b77ca2664bf50e19b87f66fba4e621e5c1f17b4a1faa1a68f1baa83c",
+    "predictions/hs.csv.gz": "749932bb38d8592c90090e138ae1c91f26aeddda2b609f1b7040d5d20bcaa9e5",
+    "predictions/rw_ewma.csv.gz": "f9839b28cec36d7078313a476cc71bcdaf4aede8b85ad2a17c942e40ac5471f4",
+    "report.html": "f54f740ff31eb5c1b560dc43f15db603c01e0b29e84061f54d1d2f0ed8812998",
+    "risk.csv": "6090beed577ede0ef956c1ab0ec2bf01f8b2cda4ca4350dcb27fcc2af78a8b72",
+    "summary.md": "79f236a16159b9d25cba7c017bb8458a84cefdc071865c5ee9fafcc3fd5bb5e8"
+  },
+  "command": "tsfm-mre run configs/synthetic.yaml --out results/synthetic"
+}
